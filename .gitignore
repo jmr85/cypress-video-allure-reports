@@ -1,0 +1,12 @@
+node_modules
+cypress/videos
+cypress/screenshots
+mochawesome-report
+allure-report
+allure-results
+
+# Ignore Visual Studio Code settings and workspace files
+.vscode/
+
+# Log file
+*.log
