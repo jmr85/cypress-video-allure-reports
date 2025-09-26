@@ -1,59 +1,104 @@
 const { defineConfig } = require("cypress");
 const fs = require('fs');
+const { promises: fsPromises } = require('fs');
 const path = require('path');
 const allureWriter = require('@shelex/cypress-allure-plugin/writer');
 
-function safeReadJson(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+async function safeReadJson(file) {
+  try { 
+    const content = await fsPromises.readFile(file, 'utf8');
+    return JSON.parse(content);
+  } catch { 
+    return null; 
+  }
 }
 
 module.exports = defineConfig({
   e2e: {
     setupNodeEvents(on, config) {
       allureWriter(on, config);
-            
-      on('after:run', (runResults) => {
+      
+      on('after:spec', async (spec, results) => {
+        if (results && results.video) {
+          // Verificar si hay fallas en algún intento
+          const failures = results.tests.some(test =>
+            test.attempts.some(attempt => attempt.state === 'failed')
+          )
+          if (!failures) {
+            // eliminar el video si pasó todo y no hubo reintentos fallidos
+            await fsPromises.unlink(results.video)
+          }
+        }
+      })
+
+      on('after:run', async (runResults) => {
         const resultsDir = path.resolve('allure-results');
         if (!runResults?.runs?.length || !fs.existsSync(resultsDir)) return;
 
-        // 0) Cargar TODOS los JSON una sola vez
-        const jsonFiles = fs.readdirSync(resultsDir).filter(f => f.endsWith('.json'));
-        const jsonIndex = []; // [{file, fullPath, data, labelsText}]
-        for (const f of jsonFiles) {
-          const full = path.join(resultsDir, f);
-          const data = safeReadJson(full);
-          if (data) jsonIndex.push({ file: f, fullPath: full, data, labelsText: JSON.stringify(data.labels || []) });
-        }
-
-        for (const r of runResults.runs) {
-          const compressedVideoPath = r?.video;
-          if (!compressedVideoPath || !fs.existsSync(compressedVideoPath)) continue;
-
-          const specName = path.basename(r.spec?.relative || r.spec?.name || compressedVideoPath);
-          const specKey = (r.spec?.relative || specName).replace(/[\/\\]/g, '__');
-          const targetName = `video__${specKey}.mp4`;
-          const targetPath = path.join(resultsDir, targetName);
-
-          // 1) Copiar el MP4 comprimido una vez
-          fs.copyFileSync(compressedVideoPath, targetPath);
-
-          // 2) Tocar SOLO los JSON relacionados con este spec
-          for (const item of jsonIndex) {
-            if (!item.labelsText.includes(specName)) continue;
-
-            let touched = false;
-            if (Array.isArray(item.data.attachments)) {
-              for (const att of item.data.attachments) {
-                if (att?.type === 'video/mp4') {
-                  att.source = targetName;
-                  touched = true;
-                }
+        try {
+          const allFiles = await fsPromises.readdir(resultsDir);
+          const jsonFiles = allFiles.filter(f => f.endsWith('.json'));
+          
+          // Cargar todos los JSON en paralelo
+          const jsonIndex = await Promise.all(
+            jsonFiles.map(async (f) => {
+              const fullPath = path.join(resultsDir, f);
+              const data = await safeReadJson(fullPath);
+              if (data) {
+                return {
+                  file: f,
+                  fullPath,
+                  data,
+                  labelsText: JSON.stringify(data.labels || [])
+                };
               }
-            }
-            if (touched) {
-              fs.writeFileSync(item.fullPath, JSON.stringify(item.data), 'utf8');
-            }
-          }
+              return null;
+            })
+          );
+
+          const validJsons = jsonIndex.filter(item => item !== null);
+
+          await Promise.all(
+            runResults.runs.map(async (r) => {
+              const compressedVideoPath = r?.video;
+              if (!compressedVideoPath || !fs.existsSync(compressedVideoPath)) return;
+
+              const specName = path.basename(r.spec?.relative || r.spec?.name || compressedVideoPath);
+              const specKey = (r.spec?.relative || specName).replace(/[**\/\\**]/g, '__');
+              const targetName = `video__${specKey}.mp4`;
+              const targetPath = path.join(resultsDir, targetName);
+
+              await fsPromises.copyFile(compressedVideoPath, targetPath);
+
+              const updatePromises = validJsons
+                .filter(item => item.labelsText.includes(specName))
+                .map(async (item) => {
+                  let touched = false;
+                  
+                  if (Array.isArray(item.data.attachments)) {
+                    for (const att of item.data.attachments) {
+                      if (att?.type === 'video/mp4') {
+                        att.source = targetName;
+                        touched = true;
+                      }
+                    }
+                  }
+
+                  if (touched) {
+                    await fsPromises.writeFile(
+                      item.fullPath, 
+                      JSON.stringify(item.data), 
+                      'utf8'
+                    );
+                  }
+                });
+
+              await Promise.all(updatePromises);
+            })
+          );
+
+        } catch (error) {
+          console.error('Error en after:run hook:', error);
         }
       });
 
