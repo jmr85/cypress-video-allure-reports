@@ -7,14 +7,18 @@ En este proyecto, la generación de videos comprimidos por Cypress se adjunta al
 
 ## 📁 Estructura del proyecto
 
+```text
+.
 ├── cypress/
-│ ├── e2e/ # pruebas de extremo a extremo
-│ ├── fixtures/
-│ ├── support/
-│ ├── utils/ # scripts auxiliares (ej: manejo de videos)
-│ └── videos/ # videos generados de las ejecuciones
+│   ├── e2e/                # pruebas de extremo a extremo
+│   ├── fixtures/
+│   ├── support/
+│   ├── utils/              # scripts auxiliares (manejo de videos)
+│   └── videos/             # videos generados de las ejecuciones
 ├── cypress.config.js
 ├── package.json
+└── ...
+```
 
 ---
 
